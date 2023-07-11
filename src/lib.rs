@@ -864,6 +864,10 @@ const UBLK_IO_NEED_COMMIT_RQ_COMP: u32 = 1_u32 << 1;
 const UBLK_IO_FREE: u32 = 1u32 << 2;
 
 struct UblkIO {
+    // for holding the allocated buffer
+    __buf_addr: *mut u8,
+
+    //for sending as io command
     buf_addr: *mut u8,
     flags: u32,
     result: i32,
@@ -916,7 +920,7 @@ impl Drop for UblkQueue<'_> {
         for i in 0..depth {
             let io = &self.ios[i as usize];
             ublk_dealloc_buf(
-                io.buf_addr,
+                io.__buf_addr,
                 dev.dev_info.max_io_buf_bytes as usize,
                 unsafe { libc::sysconf(libc::_SC_PAGESIZE).try_into().unwrap() },
             );
@@ -992,9 +996,14 @@ impl UblkQueue<'_> {
             ios.set_len(depth as usize);
         }
         for io in &mut ios {
-            io.buf_addr = ublk_alloc_buf(dev.dev_info.max_io_buf_bytes as usize, unsafe {
+            io.__buf_addr = ublk_alloc_buf(dev.dev_info.max_io_buf_bytes as usize, unsafe {
                 libc::sysconf(libc::_SC_PAGESIZE).try_into().unwrap()
             });
+
+            if (dev.dev_info.flags & (UBLK_F_USER_COPY as u64)) == 0 {
+                io.buf_addr = io.__buf_addr;
+            }
+
             io.flags = UBLK_IO_NEED_FETCH_RQ | UBLK_IO_FREE;
             io.result = -1;
         }
@@ -1017,7 +1026,13 @@ impl UblkQueue<'_> {
 
     #[inline(always)]
     pub fn get_buf_addr(&self, tag: u32) -> *mut u8 {
-        self.ios[tag as usize].buf_addr
+        self.ios[tag as usize].__buf_addr
+    }
+
+    #[inline(always)]
+    pub fn set_buf_addr(&mut self, tag: u32, addr: u64) {
+        assert!(self.dev.dev_info.flags & ((UBLK_F_USER_COPY | UBLK_F_ZONED) as u64) != 0);
+        self.ios[tag as usize].buf_addr = addr as *mut u8;
     }
 
     #[inline(always)]
