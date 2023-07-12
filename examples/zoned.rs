@@ -75,22 +75,20 @@ impl ZonedTgt {
             sector += zone_size >> 9;
         }
 
-        let tgt = ZonedTgt {
-            size: size,
+        ZonedTgt {
+            size,
             start: buf_addr,
-            zone_size: zone_size,
+            zone_size,
             _zone_capacity: zone_size,
             zone_max_open: 0,
             zone_max_active: 0,
             nr_zones: nr_zones as u32,
             data: RwLock::new(TgtData {
-                zones: zones,
+                zones,
                 ..Default::default()
             }),
             ..Default::default()
-        };
-
-        tgt
+        }
     }
 
     fn __close_zone(&self, data: &mut std::sync::RwLockWriteGuard<'_, TgtData>, zno: usize) -> i32 {
@@ -151,7 +149,7 @@ impl ZonedTgt {
             return 0;
         }
 
-        return -libc::EBUSY;
+        -libc::EBUSY
     }
 
     fn check_open(&self, data: &mut std::sync::RwLockWriteGuard<'_, TgtData>) -> i32 {
@@ -170,7 +168,7 @@ impl ZonedTgt {
             }
         }
 
-        return -libc::EBUSY;
+        -libc::EBUSY
     }
 
     fn check_zone_resources(
@@ -184,10 +182,10 @@ impl ZonedTgt {
                 if ret != 0 {
                     return ret;
                 }
-                return self.check_open(data);
+                self.check_open(data)
             }
-            BLK_ZONE_COND_CLOSED => return self.check_open(data),
-            _ => return -libc::EIO,
+            BLK_ZONE_COND_CLOSED => self.check_open(data),
+            _ => -libc::EIO,
         }
     }
 
@@ -429,16 +427,13 @@ fn handle_mgmt(tgt: &ZonedTgt, iod: &libublk::ublksrv_io_desc) -> i32 {
         }
     }
 
-    let ret;
     match iod.op_flags & 0xff {
-        libublk::UBLK_IO_OP_ZONE_RESET => ret = tgt.zone_reset(iod.start_sector),
-        libublk::UBLK_IO_OP_ZONE_OPEN => ret = tgt.zone_open(iod.start_sector),
-        libublk::UBLK_IO_OP_ZONE_CLOSE => ret = tgt.zone_close(iod.start_sector),
-        libublk::UBLK_IO_OP_ZONE_FINISH => ret = tgt.zone_finish(iod.start_sector),
-        _ => ret = -libc::EINVAL,
+        libublk::UBLK_IO_OP_ZONE_RESET => tgt.zone_reset(iod.start_sector),
+        libublk::UBLK_IO_OP_ZONE_OPEN => tgt.zone_open(iod.start_sector),
+        libublk::UBLK_IO_OP_ZONE_CLOSE => tgt.zone_close(iod.start_sector),
+        libublk::UBLK_IO_OP_ZONE_FINISH => tgt.zone_finish(iod.start_sector),
+        _ => -libc::EINVAL,
     }
-
-    ret
 }
 
 fn handle_read(tgt: &ZonedTgt, q: &mut UblkQueue, iod: &libublk::ublksrv_io_desc, tag: u32) -> i32 {
@@ -543,7 +538,7 @@ fn handle_write(
     }
 
     let sector = data.zones[zno].wp;
-    if append == false && iod.start_sector != sector {
+    if !append && iod.start_sector != sector {
         return (u64::MAX, ret);
     }
 
