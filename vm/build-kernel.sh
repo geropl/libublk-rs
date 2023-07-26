@@ -12,3 +12,4 @@ tar xvf linux-6.1.41.tar.xz
 cd linux-6.1.41
 cp "$ORGDIR/linux-config" .config
 make -j 4
+./scripts/extract-vmlinux arch/x86/boot/bzImage > $ORGDIR/vmlinux
