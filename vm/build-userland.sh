@@ -16,13 +16,17 @@ curl -L -o "${outdir}/server-cloudimg-amd64.img" $img_url
 
 cd $outdir
 
-qemu-img resize server-cloudimg-amd64.img +20G
+qemu-img create -b server-cloudimg-amd64.img -F qcow2 -f qcow2 server-cloudimg-amd64.qcow2 100G
+
+ssh-keygen -b 2048 -t rsa -f sshkey -q -N ""
 
 cat >user-data <<EOF
 #cloud-config
-password: asdfqwer
+password: foobar
 chpasswd: { expire: False }
 ssh_pwauth: True
+ssh_authorized_keys:
+  - $(cat sshkey.pub)
 EOF
 
 cloud-localds user-data.img user-data
