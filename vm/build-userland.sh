@@ -24,9 +24,12 @@ cat >user-data <<EOF
 #cloud-config
 password: foobar
 chpasswd: { expire: False }
+hostname: ubuntu
 ssh_pwauth: True
 ssh_authorized_keys:
   - $(cat sshkey.pub)
+runcmd:
+  - echo foobar | passwd
 EOF
 
 cloud-localds user-data.img user-data
