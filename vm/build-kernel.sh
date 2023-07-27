@@ -13,6 +13,7 @@ cd linux-6.1.41
 make defconfig
 make kvm_guest.config
 sed -i /# CONFIG_BLK_DEV_UBLK is not set/CONFIG_BLK_DEV_UBLK=y/g
+sed -i /# CONFIG_PVH is not set/CONFIG_PVH=y/g
 make -j 4
 
 mkdir -p $ORGDIR/_output
