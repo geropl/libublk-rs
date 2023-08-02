@@ -12,8 +12,8 @@ tar xvf linux-6.1.41.tar.xz
 cd linux-6.1.41
 make defconfig
 make kvm_guest.config
-sed -i /# CONFIG_BLK_DEV_UBLK is not set/CONFIG_BLK_DEV_UBLK=y/g
-sed -i /# CONFIG_PVH is not set/CONFIG_PVH=y/g
+sed -i 's/# CONFIG_BLK_DEV_UBLK is not set/CONFIG_BLK_DEV_UBLK=y/g' .config
+sed -i 's/# CONFIG_PVH is not set/CONFIG_PVH=y/g' .config
 make -j 4
 
 mkdir -p $ORGDIR/_output
