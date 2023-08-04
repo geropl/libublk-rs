@@ -1,31 +1,84 @@
 use anyhow::Result;
+use bytes::BufMut;
 use io_uring::{opcode, squeue, types};
 use libublk::io::{UblkDev, UblkIOCtx, UblkQueueCtx};
 use libublk::{ctrl::UblkCtrl, UblkError};
-use log::trace;
+use log::{trace, info};
 use serde::Serialize;
+
+// #[::thiserror::Error]
+// pub enum TargetError {
+//     S3Error {
+//         #[from]
+//         err: s3::error::SdkError<>
+//     }
+// }
 
 #[derive(Debug, Serialize)]
 struct S3Target {
-    target_url: String,
+    bucket: String,
+    object: String,
     #[serde(skip_serializing)]
-    s3Client: s3::Client,
+    client: s3::Client,
 }
 
-fn lo_file_size(f: &std::fs::File) -> Result<u64> {
-    if let Ok(meta) = f.metadata() {
-        if meta.file_type().is_file() {
-            Ok(f.metadata().unwrap().len())
-        } else {
-            Err(anyhow::anyhow!("unsupported file"))
+impl S3Target {
+    async fn load(self) -> Result<(S3DevInitParams, Content), anyhow::Error> {
+        let obj_attrs = self.client
+            .get_object_attributes()
+            .bucket(&self.bucket)
+            .key(&self.object)
+            .send()
+            .await?;
+        let size = u64::try_from(obj_attrs.object_size())?;
+        info!("Found object {} / {} to be of size: {} bytes", self.bucket, self.object, size);
+
+        let mut object = self.client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(&self.object)
+            .send()
+            .await?;
+        let mut content = bytes::BytesMut::with_capacity(size.try_into()?);
+        
+        use tokio_stream::StreamExt;
+        let mut _byte_count = 0_usize;
+        while let Some(bytes) = object.body.try_next().await? {
+            let bytes_read = bytes.len();
+            content.put(bytes);
+            _byte_count += bytes_read;
+            trace!("Intermediate write of {}", bytes_read);
         }
-    } else {
-        Err(anyhow::anyhow!("no file meta got"))
+
+        let params = S3DevInitParams { dev_size: u64::try_from(size)? };
+        let content = Content { bytes: content };
+        Ok((params, content))
     }
 }
 
+struct Content {
+    bytes: bytes::BytesMut,
+}
+
+#[derive(Debug, Serialize)]
+struct S3DevInitParams {
+    dev_size: u64,
+}
+
+// fn lo_file_size(f: &std::fs::File) -> Result<u64> {
+//     if let Ok(meta) = f.metadata() {
+//         if meta.file_type().is_file() {
+//             Ok(f.metadata().unwrap().len())
+//         } else {
+//             Err(anyhow::anyhow!("unsupported file"))
+//         }
+//     } else {
+//         Err(anyhow::anyhow!("no file meta got"))
+//     }
+// }
+
 // setup s3 target
-fn lo_init_tgt(dev: &mut UblkDev, s3_target: &S3Target) -> Result<serde_json::Value, UblkError> {
+fn lo_init_tgt(dev: &mut UblkDev, params: &S3DevInitParams) -> Result<serde_json::Value, UblkError> {
     trace!("s3: init_target {}", dev.dev_info.dev_id);
     // if lo.direct_io != 0 {
     //     unsafe {
@@ -35,17 +88,18 @@ fn lo_init_tgt(dev: &mut UblkDev, s3_target: &S3Target) -> Result<serde_json::Va
 
     let dev_size = {
         let tgt = &mut dev.tgt;
-        let nr_fds = tgt.nr_fds;
+        // let nr_fds = tgt.nr_fds;
         // tgt.fds[nr_fds as usize] = s3_target.back_file.as_raw_fd();
-        tgt.nr_fds = nr_fds + 1;
+        // tgt.nr_fds = nr_fds + 1;
 
         // tgt.dev_size = lo_file_size(&s3_target.back_file).unwrap();
+        tgt.dev_size = params.dev_size;
         tgt.dev_size
     };
     dev.set_default_params(dev_size);
 
     Ok(
-        serde_json::json!({"S3": s3_target }),
+        serde_json::json!({"S3DevInitParams": params }),
     )
 }
 
@@ -131,17 +185,19 @@ async fn test_add() -> Result<(), anyhow::Error> {
     let config = ::aws_config::load_from_env().await;
     let client = s3::Client::new(&config);
 
-    let target_url = std::env::args().nth(2).unwrap();
-
+    let bucket = std::env::args().nth(2).unwrap();
+    let object = std::env::args().nth(3).unwrap();
 
     let _pid = unsafe { libc::fork() };
 
     if _pid == 0 {
         // Target has to live in the whole device lifetime
         let s3_target = S3Target {
-            target_url,
-            s3Client: client,
+            bucket,
+            object,
+            client,
         };
+        let (s3_params, content) = s3_target.load().await?;
         libublk::ublk_tgt_worker(
             "s3".to_string(),
             -1,
@@ -151,7 +207,7 @@ async fn test_add() -> Result<(), anyhow::Error> {
             0,
             true,
             0,
-            |dev: &mut UblkDev| lo_init_tgt(dev, &s3_target),
+            |dev: &mut UblkDev| lo_init_tgt(dev, &s3_params),
             loop_handle_io,
             |dev_id| {
                 let mut ctrl = UblkCtrl::new(dev_id, 0, 0, 0, 0, false).unwrap();

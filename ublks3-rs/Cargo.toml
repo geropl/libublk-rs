@@ -17,3 +17,5 @@ io-uring = "0.6.0"
 aws-config = "0.55.3"
 aws-sdk-s3 = "0.28.0"
 tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1.14"
+bytes = "1.4.0"
