@@ -4,18 +4,12 @@ use libublk::io::{UblkDev, UblkIOCtx, UblkQueueCtx};
 use libublk::{ctrl::UblkCtrl, UblkError};
 use log::trace;
 use serde::Serialize;
-use std::os::unix::io::AsRawFd;
 
 #[derive(Debug, Serialize)]
-struct LoJson {
-    back_file_path: String,
-    direct_io: i32,
-}
-
-struct LoopTgt {
-    back_file_path: String,
-    back_file: std::fs::File,
-    direct_io: i32,
+struct S3Target {
+    target_url: String,
+    #[serde(skip_serializing)]
+    s3Client: s3::Client,
 }
 
 fn lo_file_size(f: &std::fs::File) -> Result<u64> {
@@ -30,28 +24,28 @@ fn lo_file_size(f: &std::fs::File) -> Result<u64> {
     }
 }
 
-// setup loop target
-fn lo_init_tgt(dev: &mut UblkDev, lo: &LoopTgt) -> Result<serde_json::Value, UblkError> {
-    trace!("loop: init_tgt {}", dev.dev_info.dev_id);
-    if lo.direct_io != 0 {
-        unsafe {
-            libc::fcntl(lo.back_file.as_raw_fd(), libc::F_SETFL, libc::O_DIRECT);
-        }
-    }
+// setup s3 target
+fn lo_init_tgt(dev: &mut UblkDev, s3_target: &S3Target) -> Result<serde_json::Value, UblkError> {
+    trace!("s3: init_target {}", dev.dev_info.dev_id);
+    // if lo.direct_io != 0 {
+    //     unsafe {
+    //         libc::fcntl(lo.back_file.as_raw_fd(), libc::F_SETFL, libc::O_DIRECT);
+    //     }
+    // }
 
     let dev_size = {
         let tgt = &mut dev.tgt;
         let nr_fds = tgt.nr_fds;
-        tgt.fds[nr_fds as usize] = lo.back_file.as_raw_fd();
+        // tgt.fds[nr_fds as usize] = s3_target.back_file.as_raw_fd();
         tgt.nr_fds = nr_fds + 1;
 
-        tgt.dev_size = lo_file_size(&lo.back_file).unwrap();
+        // tgt.dev_size = lo_file_size(&s3_target.back_file).unwrap();
         tgt.dev_size
     };
     dev.set_default_params(dev_size);
 
     Ok(
-        serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: 1 } }),
+        serde_json::json!({"S3": s3_target }),
     )
 }
 
@@ -133,23 +127,23 @@ fn loop_handle_io(ctx: &UblkQueueCtx, i: &mut UblkIOCtx) -> Result<i32, UblkErro
     loop_queue_tgt_io(i, tag, iod)
 }
 
-fn test_add() {
-    let back_file = std::env::args().nth(2).unwrap();
+async fn test_add() -> Result<(), anyhow::Error> {
+    let config = ::aws_config::load_from_env().await;
+    let client = s3::Client::new(&config);
+
+    let target_url = std::env::args().nth(2).unwrap();
+
+
     let _pid = unsafe { libc::fork() };
 
     if _pid == 0 {
-        // LooTgt has to live in the whole device lifetime
-        let lo = LoopTgt {
-            back_file: std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&back_file)
-                .unwrap(),
-            direct_io: 1,
-            back_file_path: back_file.clone(),
+        // Target has to live in the whole device lifetime
+        let s3_target = S3Target {
+            target_url,
+            s3Client: client,
         };
         libublk::ublk_tgt_worker(
-            "loop".to_string(),
+            "s3".to_string(),
             -1,
             1,
             64,
@@ -157,7 +151,7 @@ fn test_add() {
             0,
             true,
             0,
-            |dev: &mut UblkDev| lo_init_tgt(dev, &lo),
+            |dev: &mut UblkDev| lo_init_tgt(dev, &s3_target),
             loop_handle_io,
             |dev_id| {
                 let mut ctrl = UblkCtrl::new(dev_id, 0, 0, 0, 0, false).unwrap();
@@ -166,9 +160,9 @@ fn test_add() {
             },
         )
         .unwrap()
-        .join()
-        .unwrap();
+        .join().map_err(|err| anyhow::anyhow!("err: {:#?}", err) )?;
     }
+    Ok(())
 }
 
 fn test_del() {
@@ -179,12 +173,17 @@ fn test_del() {
     ctrl.del().unwrap();
 }
 
-fn main() {
+use aws_sdk_s3 as s3;
+
+#[::tokio::main]
+async fn main() -> Result<(), anyhow::Error> {
     if let Some(cmd) = std::env::args().nth(1) {
         match cmd.as_str() {
-            "add" => test_add(),
+            "add" => test_add().await?,
             "del" => test_del(),
             _ => todo!(),
         }
     }
+
+    Ok(())
 }
