@@ -2,7 +2,7 @@
 
 set -eoux pipefail
 
-ORGDIR=$PWD
+script_dirname="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 tmpdir=$(mktemp -d)
 pushd $tmpdir
 
@@ -16,5 +16,5 @@ sed -i 's/# CONFIG_BLK_DEV_UBLK is not set/CONFIG_BLK_DEV_UBLK=y/g' .config
 sed -i 's/# CONFIG_PVH is not set/CONFIG_PVH=y/g' .config
 make -j 4
 
-mkdir -p $ORGDIR/_output
-./scripts/extract-vmlinux arch/x86/boot/bzImage > $ORGDIR/_output/vmlinux
+mkdir -p $script_dirname/_output
+./scripts/extract-vmlinux arch/x86/boot/bzImage > $script_dirname/_output/vmlinux

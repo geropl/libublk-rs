@@ -294,9 +294,8 @@ async fn main() -> Result<(), anyhow::Error> {
                 test_add(dev_id, bucket, object).await?
             },
             "del" => test_del(dev_id.unwrap_or(0)),
-            _ => todo!(),
+            _ => return Err(anyhow!("unknown command")),
         }
     }
-
-    Ok(())
+    Err(anyhow!("missing command argument"))
 }
