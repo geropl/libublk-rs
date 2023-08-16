@@ -23,7 +23,7 @@ struct S3Target {
 }
 
 impl S3Target {
-    async fn load(self) -> Result<(S3DevInitParams, Content), anyhow::Error> {
+    async fn load(self) -> Result<S3Content, anyhow::Error> {
         let obj_attrs = self.client
             .get_object_attributes()
             .bucket(&self.bucket)
@@ -50,20 +50,18 @@ impl S3Target {
             trace!("Intermediate write of {}", bytes_read);
         }
 
-        let params = S3DevInitParams { dev_size: u64::try_from(size)? };
-        let content = Content { bytes: content };
-        Ok((params, content))
+        let content = S3Content { size: u64::try_from(size)?, bytes: content };
+        Ok(content)
     }
 }
 
-struct Content {
+#[derive(Debug, Serialize)]
+struct S3Content {
+    size: u64,
+    #[serde(skip_serializing)]
     bytes: bytes::BytesMut,
 }
 
-#[derive(Debug, Serialize)]
-struct S3DevInitParams {
-    dev_size: u64,
-}
 
 // fn lo_file_size(f: &std::fs::File) -> Result<u64> {
 //     if let Ok(meta) = f.metadata() {
@@ -78,7 +76,7 @@ struct S3DevInitParams {
 // }
 
 // setup s3 target
-fn lo_init_tgt(dev: &mut UblkDev, params: &S3DevInitParams) -> Result<serde_json::Value, UblkError> {
+fn lo_init_tgt(dev: &mut UblkDev, content_size: u64) -> Result<serde_json::Value, UblkError> {
     trace!("s3: init_target {}", dev.dev_info.dev_id);
     // if lo.direct_io != 0 {
     //     unsafe {
@@ -93,13 +91,13 @@ fn lo_init_tgt(dev: &mut UblkDev, params: &S3DevInitParams) -> Result<serde_json
         // tgt.nr_fds = nr_fds + 1;
 
         // tgt.dev_size = lo_file_size(&s3_target.back_file).unwrap();
-        tgt.dev_size = params.dev_size;
+        tgt.dev_size = content_size;
         tgt.dev_size
     };
     dev.set_default_params(dev_size);
 
     Ok(
-        serde_json::json!({"S3DevInitParams": params }),
+        serde_json::json!({"content_size": content_size }),
     )
 }
 
@@ -197,7 +195,7 @@ async fn test_add() -> Result<(), anyhow::Error> {
             object,
             client,
         };
-        let (s3_params, content) = s3_target.load().await?;
+        let content = s3_target.load().await?;
         libublk::ublk_tgt_worker(
             "s3".to_string(),
             -1,
@@ -207,10 +205,10 @@ async fn test_add() -> Result<(), anyhow::Error> {
             0,
             true,
             0,
-            |dev: &mut UblkDev| lo_init_tgt(dev, &s3_params),
+            |dev: &mut UblkDev| lo_init_tgt(dev, content.size),
             loop_handle_io,
             |dev_id| {
-                let mut ctrl = UblkCtrl::new(dev_id, 0, 0, 0, 0, false).unwrap();
+                let mut ctrl = create_ublk_ctrl(dev_id).unwrap();
 
                 ctrl.dump();
             },
@@ -224,9 +222,13 @@ async fn test_add() -> Result<(), anyhow::Error> {
 fn test_del() {
     let s = std::env::args().nth(2).unwrap_or_else(|| "0".to_string());
     let dev_id = s.parse::<i32>().unwrap();
-    let mut ctrl = UblkCtrl::new(dev_id as i32, 0, 0, 0, 0, false).unwrap();
+    let mut ctrl = create_ublk_ctrl(dev_id).unwrap();
 
     ctrl.del().unwrap();
+}
+
+fn create_ublk_ctrl(dev_id: i32) -> Result<UblkCtrl, UblkError> {
+    UblkCtrl::new(dev_id, 1, 64,  512_u32 * 1024, 0, false)
 }
 
 use aws_sdk_s3 as s3;
